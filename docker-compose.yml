@@ -1,0 +1,62 @@
+services:
+  db:
+    image: mysql:8.0
+    restart: unless-stopped
+    environment:
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD}
+      MYSQL_DATABASE: ${MYSQL_DATABASE}
+    ports:
+      - "3307:3306"            # 3307 côté PC pour ne pas gêner un MySQL local
+    volumes:
+      - mysql_data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-p${MYSQL_ROOT_PASSWORD}"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  backend:
+    build: ./backend
+    restart: unless-stopped
+    env_file: ./backend/.env
+    environment:
+      # Ces valeurs ECRASENT celles de backend/.env quand on tourne dans Docker.
+      # Dans Docker, MySQL s'appelle "db" (PAS localhost)
+      DB_HOST: db
+      DB_PORT: "3306"
+      DB_NAME: ${MYSQL_DATABASE}
+      DB_USER: root
+      DB_PASSWORD: ${MYSQL_ROOT_PASSWORD}
+      CORS_ORIGINS: http://localhost:3000
+    ports:
+      - "8000:8000"
+    depends_on:
+      db:
+        condition: service_healthy
+    volumes:
+      - ./backend:/app                      # rechargement auto du code
+      - hf_cache:/root/.cache/huggingface   # modèles téléchargés une seule fois
+      - model_offload:/app/model_offload
+    command: >
+      sh -c "python create_tables.py &&
+             uvicorn main:app --host 0.0.0.0 --port 8000 --reload"
+
+  frontend:
+    build: ./frontend
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    environment:
+      REACT_APP_API_URL: http://localhost:8000
+      CHOKIDAR_USEPOLLING: "true"           # nécessaire pour le hot-reload sous Windows
+      WATCHPACK_POLLING: "true"
+    volumes:
+      - ./frontend:/app
+      - /app/node_modules                   # garde les node_modules du conteneur
+    depends_on:
+      - backend
+
+volumes:
+  mysql_data:
+  hf_cache:
+  model_offload:
